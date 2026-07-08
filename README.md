@@ -174,6 +174,7 @@ cd FastApi
 ## 在当前项目目录下创建一个名叫 .venv 的虚拟环境文件夹。它相当于给这个项目单独准备一套 Python 运行环境，后面安装的 fastapi、uvicorn 等依赖都会装到这个 .venv 里，不污染你电脑上的全局 Python。
 python -m venv .venv
 ## 激活刚刚创建的 .venv 环境
+# Linux 系统
 source .venv/bin/activate
 
 pip install -r requirements.txt

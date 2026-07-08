@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Path, Query
-// 导入BaseModel函数
+# 导入BaseModel函数
 from pydantic import BaseModel
 
 # 1、创建FastApi实例：app
@@ -48,11 +48,12 @@ async def divide(a: int = Query(0, gt=0, lt=100), b: int = Query(10, gt=0, lt=10
     return {"result": a * b}
 
 
-// 定义类型
+# 定义类型
 class User(BaseModel):
     username: str
     password: str
-// 类型注解
+
+# 类型注解
 @app.post("/register")
 async def register(user: User):
     return user
