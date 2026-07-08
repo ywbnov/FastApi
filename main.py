@@ -1,4 +1,7 @@
 from fastapi import FastAPI, Path, Query
+// 导入BaseModel函数
+from pydantic import BaseModel
+
 # 1、创建FastApi实例：app
 app = FastAPI()
 
@@ -44,6 +47,12 @@ async def divide(a: int = Query(0, gt=0, lt=100), b: int = Query(10, gt=0, lt=10
         return {"error": "Division by zero is not allowed."}
     return {"result": a * b}
 
-@app.post("/multiply")
-async def multiply(a: int, b: int):
-    return {"result": a * b}
+
+// 定义类型
+class User(BaseModel):
+    username: str
+    password: str
+// 类型注解
+@app.post("/register")
+async def register(user: User):
+    return user
