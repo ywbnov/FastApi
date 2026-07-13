@@ -9,5 +9,7 @@ __pycache__/
 .env.*
 !.env.example
 .vscode/
-#.fastApiStudy/
+.fastApiStudy/image*
 images/
+docs/
+deploy/

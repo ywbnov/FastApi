@@ -60,7 +60,7 @@ python -m pip install -r requirements.txt
 在项目根目录执行：
 
 ```powershell
-python -m uvicorn main:app --reload
+.\.venv\python.exe -m uvicorn main:app --reload
 ```
 
 含义说明：
