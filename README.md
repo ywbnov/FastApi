@@ -4,17 +4,18 @@
 
 本项目已经具备运行 `main.py` 的基础环境：
 
-- Python: `3.12.13`
-- 虚拟环境目录: `.venv`
+- Python: `3.11.15`
+- 虚拟环境目录: `.venv`（Conda 前缀环境）
 - Web 框架: `fastapi`
 - ASGI 服务器: `uvicorn`
 - 入口文件: `main.py`
 
-`main.py` 当前提供了两个接口：
+启动后可以通过以下入口查看接口：
 
 ```text
 GET /
-GET /hello/{name}
+GET /docs
+GET /redoc
 ```
 
 ## 2. 激活虚拟环境
@@ -22,35 +23,32 @@ GET /hello/{name}
 在 PowerShell 中进入项目目录：
 
 ```powershell
-cd E:\PycharmProjects\FastApi
+cd "E:\Program Files\FastApi"
 ```
 
-激活虚拟环境：
+当前 `.venv` 是 Conda 风格环境，推荐直接使用其中的 Python，不需要激活：
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\.venv\python.exe --version
 ```
 
-激活成功后，终端前面通常会出现 `(.venv)`。
-
-如果 PowerShell 阻止脚本执行，可以临时放开当前窗口权限：
+如果希望当前 PowerShell 窗口中的 `python` 命令指向该环境，可以执行：
 
 ```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+$env:CONDA_PREFIX = (Resolve-Path ".\.venv").Path
+$env:PATH = "$env:CONDA_PREFIX;$env:CONDA_PREFIX\Library\bin;$env:CONDA_PREFIX\Scripts;$env:PATH"
+python --version
 ```
 
-然后再次执行：
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
+不要对现有目录再次运行 `python -m venv .venv`，否则会把 Conda 环境与标准
+`venv` 混合，造成 `pip` 或已安装模块无法识别。
 
 ## 3. 安装项目依赖
 
 如果是第一次拉取项目，或者换了一台电脑运行，可以执行：
 
 ```powershell
-python -m pip install -r requirements.txt
+.\.venv\python.exe -m pip install -r requirements.txt
 ```
 
 本项目当前依赖写在 `requirements.txt` 中。
