@@ -1,4 +1,7 @@
-"""FastAPI + SQLAlchemy 2.0 异步 ORM 学习应用。
+r"""FastAPI + SQLAlchemy 2.0 异步 ORM 学习应用。
+
+完整的软件工程分层、请求链路和 Session 生命周期说明见
+同目录下的 MAIN_ARCHITECTURE.md。
 
 启动命令：
     .\.venv\python.exe .\main.py
@@ -61,6 +64,9 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
+# ---------------------------------------------------------------------------
+# 运行环境与基础配置
+# ---------------------------------------------------------------------------
 # aiomysql 在 Windows 下使用 Selector 事件循环兼容性更好。
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -76,15 +82,20 @@ DEFAULT_SEED_SIZE = 120
 
 
 def create_selector_event_loop() -> asyncio.AbstractEventLoop:
-    """供 Uvicorn 使用的事件循环工厂，兼容 Windows 下 aiomysql TLS。"""
+    """供 Uvicorn 使用的事件循环工厂，兼容 Windows 下 aiomysql TLS。
+
+    Uvicorn 负责运行 ASGI 应用，事件循环负责调度 HTTP 请求、数据库 I/O 等
+    异步任务。这里显式使用 SelectorEventLoop，是为了避开 Windows 默认事件
+    循环与部分 aiomysql/TLS 组合的兼容性问题。
+    """
 
     return asyncio.SelectorEventLoop()
 
-# @dataclass(frozen=True) 是装饰器，根据类定义自动生成 __init__、__repr__、__eq__ 等方法，并且 frozen=True 表示实例不可变。
-# 如果不使用装饰器，也可以手动定义 __init__ 方法来初始化属性，但会显得冗长。
+# @dataclass 根据字段声明生成 __init__、__repr__、__eq__ 等方法；
+# frozen=True 禁止连接参数在实例创建后被意外改写。
 @dataclass(frozen=True)
 class MySQLSettings:
-    """集中保存 MySQL 连接参数。"""
+    """集中保存一组 MySQL 连接参数，作为配置层与建库逻辑之间的数据载体。"""
 
     host: str
     port: int
@@ -93,7 +104,11 @@ class MySQLSettings:
 
 
 def read_key_value_file(path: Path) -> dict[str, str]:
-    """读取简单的 key=value 配置文件，忽略空行和注释。"""
+    """读取简单的 key=value 配置文件，忽略空行、注释和无效行。
+
+    该函数只负责解析文件，不了解 MySQL 业务规则；缺少文件时返回空字典，
+    让上层配置加载函数继续尝试环境变量和默认值。
+    """
 
     if not path.is_file():
         return {}
@@ -109,7 +124,11 @@ def read_key_value_file(path: Path) -> dict[str, str]:
 
 
 def load_mysql_settings() -> MySQLSettings:
-    """从环境变量或本机安装配置中获取 MySQL 用户名和密码。"""
+    """从环境变量或本机安装配置中组装并校验 MySQL 连接参数。
+
+    将配置读取集中在一个函数中，可以避免启动、建库和连接池分别读取环境
+    变量而产生不一致。密码没有安全默认值，因此缺失时直接阻止应用启动。
+    """
 
     local_values = read_key_value_file(LOCAL_CONFIG_FILE)
     host = os.getenv("MYSQL_HOST") or local_values.get("host") or "127.0.0.1"
@@ -132,14 +151,14 @@ def load_mysql_settings() -> MySQLSettings:
 
 
 def build_sqlite_database_url(path: Path) -> str:
-    """构造 SQLite 的 SQLAlchemy URL。"""
+    """把本地文件路径转换为 SQLAlchemy 异步 SQLite URL。"""
 
     absolute_path = path if path.is_absolute() else Path.cwd() / path
     return f"sqlite+aiosqlite:///{absolute_path.as_posix()}"
 
 
 def use_sqlite() -> bool:
-    """根据环境变量判断是否使用 SQLite。"""
+    """根据环境变量判断是否显式要求使用 SQLite。"""
 
     if os.getenv("DATABASE_URL", "").startswith("sqlite"):
         return True
@@ -149,7 +168,11 @@ def use_sqlite() -> bool:
 
 
 def get_database_url() -> tuple[str, str, bool]:
-    """返回数据库 URL、描述信息，以及是否为 MySQL。"""
+    """统一决定本次进程使用的数据库连接信息。
+
+    返回值依次是：供 SQLAlchemy 使用的 URL、供日志展示且不暴露密码的描述、
+    是否按 MySQL 初始化。固定的三项结构使用 tuple，调用方可以直接解包。
+    """
 
     database_url = os.getenv("DATABASE_URL")
     if database_url:
@@ -182,7 +205,11 @@ def get_database_url() -> tuple[str, str, bool]:
 
 
 def create_local_ssl_context() -> ssl.SSLContext:
-    """创建仅供本机学习环境使用的 TLS 配置。"""
+    """创建仅供本机自签名 MySQL 证书使用的 TLS 配置。
+
+    TLS 仍会加密传输，但关闭证书和主机名验证后无法确认服务端身份，因此
+    该配置不能照搬到生产环境。生产环境应加载可信 CA 并启用完整校验。
+    """
 
     context = ssl.create_default_context()
     # 本机 MySQL 使用自签名证书；生产环境必须改为可信 CA 校验。
@@ -224,10 +251,18 @@ async def ensure_database(settings: MySQLSettings, ssl_context: ssl.SSLContext) 
         connection.close()
 
 
+# ---------------------------------------------------------------------------
+# SQLAlchemy 引擎、ORM 映射与 HTTP 数据模型
+# ---------------------------------------------------------------------------
 def create_database_engine(
     database_url: str, ssl_context: ssl.SSLContext | None = None
 ) -> AsyncEngine:
-    """创建 SQLAlchemy 异步引擎，即 ORM 的数据库连接入口。"""
+    """创建应用级 SQLAlchemy 异步引擎和底层连接池。
+
+    Engine 是整个应用共享的重量级对象，不应为每个 HTTP 请求重复创建。
+    请求只创建轻量的 AsyncSession；Session 在真正执行 SQL 时才从 Engine
+    的连接池借用连接，并在会话结束后把连接归还池中。
+    """
 
     echo_sql = os.getenv("SQL_ECHO", "").lower() in {"1", "true", "yes"}
     connect_args = {"ssl": ssl_context} if ssl_context is not None else {}
@@ -240,16 +275,16 @@ def create_database_engine(
 
 
 class Base(DeclarativeBase):
-    """所有 ORM 模型的基类。"""
+    """所有 ORM 模型的基类，集中保存模型对应的表结构元数据。"""
 
 
 class User(Base):
-    """用户 ORM 模型：类对应表，类属性对应字段。"""
+    """用户 ORM 模型：一个 User 实例对应 orm_users 表中的一行。"""
 
     __tablename__ = "orm_users"
     
-    # Mapped[int]       Python 层面的类型
-    # mapped_column(Integer)  数据库层面的类型
+    # Mapped[int] 描述 Python/ORM 属性类型，mapped_column(Integer) 描述数据库列；
+    # 两者结合后，类型检查器、SQLAlchemy 映射器和数据库都能理解这个字段。
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -264,7 +299,8 @@ class User(Base):
     )
 
 
-# Pydantic 模型负责验证 HTTP 请求，并把 ORM 对象转换成 JSON 响应。
+# ORM 模型表达“数据库如何保存数据”；下面的 Pydantic 模型表达“HTTP 接口允许
+# 客户端传入和看见哪些数据”。分开建模可以防止数据库内部字段被直接暴露。
 class UserCreate(BaseModel):
     """新增用户的请求体。"""
 
@@ -352,8 +388,15 @@ class CrudDemoResponse(BaseModel):
     after_delete: UserResponse | None
 
 
+# ---------------------------------------------------------------------------
+# 数据访问与业务操作
+# ---------------------------------------------------------------------------
 async def create_tables(engine: AsyncEngine, reset: bool = False) -> None:
-    """根据 ORM 模型建表；reset=True 时先删除本应用管理的表。"""
+    """根据 ORM 元数据建表；reset=True 时先删除本应用管理的表。
+
+    建表属于应用级结构操作，所以直接使用 Engine，而不是某个请求的 Session。
+    正式项目通常应改用 Alembic 迁移，以保留可审计、可回滚的结构变更历史。
+    """
 
     async with engine.begin() as connection:
         if reset:
@@ -362,7 +405,7 @@ async def create_tables(engine: AsyncEngine, reset: bool = False) -> None:
 
 
 async def seed_users_if_empty(session: AsyncSession, seed_size: int) -> int:
-    """仅在空表时批量插入 100 至 200 条模拟数据。"""
+    """仅在空表时批量插入模拟数据，并在同一数据库会话中提交事务。"""
 
     count = await session.scalar(select(func.count()).select_from(User))
     if count:
@@ -384,13 +427,13 @@ async def seed_users_if_empty(session: AsyncSession, seed_size: int) -> int:
 
 
 async def count_users(session: AsyncSession) -> int:
-    """统计用户表中的记录总数。"""
+    """执行只读聚合查询，统计用户表中的记录总数。"""
 
     return int(await session.scalar(select(func.count()).select_from(User)) or 0)
 
 
 async def create_user_record(session: AsyncSession, payload: UserCreate) -> User:
-    """Create：通过 ORM 新增用户。"""
+    """Create：新增用户并提交事务；邮箱冲突时回滚后返回 409。"""
 
     user = User(**payload.model_dump())
     session.add(user)
@@ -404,7 +447,7 @@ async def create_user_record(session: AsyncSession, payload: UserCreate) -> User
 
 
 async def get_user_record(session: AsyncSession, user_id: int) -> User:
-    """Read：通过 ORM 按主键查询用户，不存在时返回 404。"""
+    """Read：在当前请求的 Session 中按主键查询，不存在时返回 404。"""
 
     user = await session.get(User, user_id)
     if user is None:
@@ -415,7 +458,7 @@ async def get_user_record(session: AsyncSession, user_id: int) -> User:
 async def update_user_record(
     session: AsyncSession, user_id: int, payload: UserUpdate
 ) -> User:
-    """Update：修改 ORM 对象属性，提交后 SQLAlchemy 自动生成 UPDATE。"""
+    """Update：修改已加载对象并提交，SQLAlchemy 自动生成所需的 UPDATE。"""
 
     user = await get_user_record(session, user_id)
     changes = payload.model_dump(exclude_unset=True)
@@ -437,7 +480,7 @@ async def update_user_record(
 
 
 async def delete_user_record(session: AsyncSession, user_id: int) -> None:
-    """Delete：删除 ORM 对象并提交事务。"""
+    """Delete：在当前请求的事务中删除 ORM 对象并提交。"""
 
     user = await get_user_record(session, user_id)
     await session.delete(user)
@@ -446,7 +489,12 @@ async def delete_user_record(session: AsyncSession, user_id: int) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """FastAPI 生命周期：启动时初始化数据库，关闭时释放连接池。"""
+    """管理与应用进程同生命周期的数据库资源。
+
+    yield 之前是启动阶段：选择数据库、按需建库建表、创建会话工厂和初始化
+    教学数据；yield 期间应用开始接收 HTTP 请求；yield 之后是关闭阶段，释放
+    Engine 持有的连接池。这样可以确保全局资源只初始化一次且一定被清理。
+    """
 
     database_url, database_description, is_mysql = get_database_url()
     ssl_context = create_local_ssl_context() if is_mysql else None
@@ -484,22 +532,42 @@ app = FastAPI(
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
-    """FastAPI 依赖：每个 HTTP 请求获得一个独立数据库会话。"""
+    """为一次 HTTP 请求提供独立的 SQLAlchemy 异步数据库会话。
+
+    AsyncSession 是数据库工作的边界：它跟踪本次请求加载和修改的 ORM 对象，
+    并承载查询、事务提交与回滚。每个请求独立创建可以避免并发请求共享事务、
+    未提交修改或 ORM 对象缓存，从而防止一个请求污染另一个请求。
+
+    这里的 Session 不是“用户登录会话”，不保存登录身份、Cookie 或 Token，
+    也不能据此判断当前用户只能操作自己的数据。认证通常由 JWT、Cookie 或
+    服务端登录会话实现，再将解析出的用户身份用于查询条件和权限校验。
+
+    它没有按分钟设置的固定有效期：FastAPI 进入依赖时创建会话，响应完成或
+    请求异常时退出 async with 并关闭会话。真正的数据库连接按需从 Engine
+    连接池借出，关闭 Session 后归还；网络超时、请求超时和登录过期应分别配置。
+    """
 
     session_factory: async_sessionmaker[AsyncSession] = (
         request.app.state.session_factory
     )
     async with session_factory() as session:
         try:
+            # yield 把同一个会话注入当前路由及其调用的数据访问函数。
             yield session
         except Exception:
+            # 业务函数可能已经提交成功；这里只回滚异常发生时仍未提交的事务，
+            # 让连接回到池中之前恢复为可安全复用的状态。
             await session.rollback()
             raise
 
 
+# Annotated 把“参数类型”和“如何由 FastAPI 创建它”组合成可复用的依赖类型。
 SessionDependency = Annotated[AsyncSession, Depends(get_session)]
 
 
+# ---------------------------------------------------------------------------
+# HTTP 接口层：解析请求、注入依赖，并把工作委托给业务/数据访问函数
+# ---------------------------------------------------------------------------
 @app.get("/", tags=["应用"], summary="查看 API 入口")
 async def api_root() -> dict[str, object]:
     """返回服务入口；具体操作可在 /docs 中直接调用。"""
